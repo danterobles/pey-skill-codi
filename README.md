@@ -1,5 +1,7 @@
 # pey-codi-integration · Skill para agentes de IA
 
+Repositorio: https://github.com/danterobles/pey-skill-codi
+
 Skill en formato abierto [Agent Skills](https://agentskills.io) que le enseña a un agente de código (Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot y otros) a integrar la **API CoDi® de [pey](https://pey.mx/api-codi)** en una plataforma SaaS, multitenant o no:
 
 - Cobros CoDi por **QR** y por **notificación push** al celular
@@ -15,7 +17,7 @@ Contrato documentado: OpenAPI de pey versión `2026-10-20`. El skill le indica a
 ### Claude Code (como plugin)
 
 ```
-/plugin marketplace add <tu-usuario>/pey-skill-codi
+/plugin marketplace add danterobles/pey-skill-codi
 /plugin install pey-codi@doit-skills
 ```
 
@@ -24,14 +26,19 @@ El skill queda disponible como `/pey-codi:pey-codi-integration` y Claude tambié
 ### Cualquier agente compatible con Agent Skills
 
 ```
-npx skills add <tu-usuario>/pey-skill-codi        # en el proyecto actual
-npx skills add <tu-usuario>/pey-skill-codi -g     # para todos tus proyectos
-npx skills add <tu-usuario>/pey-skill-codi -a claude-code -a cursor
+npx skills add danterobles/pey-skill-codi        # en el proyecto actual
+npx skills add danterobles/pey-skill-codi -g     # para todos tus proyectos
+npx skills add danterobles/pey-skill-codi -a claude-code -a cursor
 ```
 
 ### Manual
 
-Copia la carpeta `skills/pey-codi-integration/` a:
+```
+git clone https://github.com/danterobles/pey-skill-codi.git
+cp -r pey-skill-codi/skills/pey-codi-integration ~/.claude/skills/
+```
+
+O copia la carpeta `skills/pey-codi-integration/` a:
 
 | Agente | Por usuario | Por proyecto |
 |---|---|---|
@@ -76,7 +83,7 @@ claude plugin validate .
 
 ## Contribuir
 
-La API de pey es nueva y cambia. Si encuentras una diferencia entre el skill y la [documentación oficial](https://docs.pey.mx) o un comportamiento en producción que no esté documentado, abre un issue o un pull request.
+La API de pey es nueva y cambia. Si encuentras una diferencia entre el skill y la [documentación oficial](https://docs.pey.mx) o un comportamiento en producción que no esté documentado, abre un [issue](https://github.com/danterobles/pey-skill-codi/issues) o un pull request.
 
 ## Aviso
 

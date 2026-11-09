@@ -5,6 +5,17 @@
   "author": {
     "name": "Dante Robles"
   },
+  "homepage": "https://github.com/danterobles/pey-skill-codi",
+  "repository": "https://github.com/danterobles/pey-skill-codi",
   "license": "MIT",
-  "keywords": ["pey", "codi", "pagos", "mexico", "banxico", "webhooks", "saas", "laravel"]
+  "keywords": [
+    "pey",
+    "codi",
+    "pagos",
+    "mexico",
+    "banxico",
+    "webhooks",
+    "saas",
+    "laravel"
+  ]
 }
