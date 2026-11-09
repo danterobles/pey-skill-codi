@@ -1,0 +1,10 @@
+{
+  "name": "pey-codi",
+  "description": "Integra la API de pey (CoDi QR, CoDi push, links de pago, cuentas CLABE y webhooks) en tu SaaS",
+  "version": "1.0.0",
+  "author": {
+    "name": "Dante Robles"
+  },
+  "license": "MIT",
+  "keywords": ["pey", "codi", "pagos", "mexico", "banxico", "webhooks", "saas", "laravel"]
+}

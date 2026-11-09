@@ -1,0 +1,14 @@
+{
+  "name": "doit-skills",
+  "description": "Skills de DoIT Consulting para agentes de IA",
+  "owner": {
+    "name": "Dante Robles"
+  },
+  "plugins": [
+    {
+      "name": "pey-codi",
+      "source": ".",
+      "description": "Integra la API de pey (CoDi QR, CoDi push, links de pago, cuentas CLABE y webhooks) en tu SaaS"
+    }
+  ]
+}
