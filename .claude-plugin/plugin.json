@@ -1,7 +1,7 @@
 {
   "name": "pey-codi",
-  "description": "Integra la API de pey (CoDi QR, CoDi push, links de pago, cuentas CLABE y webhooks) en tu SaaS",
-  "version": "1.0.0",
+  "description": "Integra la API de pey (CoDi QR, CoDi push, links de pago, cuentas CLABE y webhooks) en tu SaaS, con referencias para Laravel y Node.js/TypeScript",
+  "version": "1.1.0",
   "author": {
     "name": "Dante Robles"
   },
@@ -16,6 +16,9 @@
     "banxico",
     "webhooks",
     "saas",
-    "laravel"
+    "laravel",
+    "php",
+    "nodejs",
+    "typescript"
   ]
 }

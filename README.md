@@ -2,7 +2,7 @@
 
 Repositorio: https://github.com/danterobles/pey-skill-codi
 
-Skill en formato abierto [Agent Skills](https://agentskills.io) que le enseña a un agente de código (Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot y otros) a integrar la **API CoDi® de [pey](https://pey.mx/api-codi)** en una plataforma SaaS, multitenant o no:
+Skill en formato abierto [Agent Skills](https://agentskills.io) que le enseña a un agente de código (Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot y otros) a integrar la **API CoDi® de [pey](https://pey.mx/api-codi)** en una plataforma SaaS, multitenant o no, con implementaciones de referencia para **PHP/Laravel** y **Node.js/TypeScript**:
 
 - Cobros CoDi por **QR** y por **notificación push** al celular
 - **Links de pago** hospedados (CoDi, tarjeta, Apple Pay y Google Pay)
@@ -57,7 +57,7 @@ Pídelo en lenguaje natural:
 > Revisa mi integración actual de pey contra las trampas conocidas y el definition of done.
 ```
 
-El agente detecta tu stack, decide contigo el modelo de tenencia (una API key con CLABE por tenant, o una API key por tenant), implementa el cliente, los webhooks y la conciliación, y cierra con pruebas y una checklist.
+El agente detecta tu stack (Laravel o Node.js/TypeScript; en otros lenguajes traduce los mismos componentes), decide contigo el modelo de tenencia (una API key con CLABE por tenant, o una API key por tenant), implementa el cliente, los webhooks y la conciliación, y cierra con pruebas y una checklist.
 
 ## Qué incluye
 
@@ -65,7 +65,8 @@ El agente detecta tu stack, decide contigo el modelo de tenencia (una API key co
 skills/pey-codi-integration/
 ├── SKILL.md                 # Contrato de la API, decisiones, flujos, trampas, pruebas y checklist
 └── references/
-    └── laravel.md           # Implementación de referencia en Laravel (cliente, verificador, webhook, job)
+    ├── laravel.md           # PHP / Laravel 11+: cliente, verificador, controller, job y conciliación
+    └── node-typescript.md   # Node.js 18+ / TypeScript: cliente, verificador, Express, Next.js, NestJS, Fastify, BullMQ
 ```
 
 ## Antes de usarlo en producción
