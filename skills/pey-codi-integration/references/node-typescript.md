@@ -24,12 +24,12 @@ Valida las variables al arrancar (zod, envalid o similar). Nunca las registres e
 ```ts
 // Tipos del contrato de pey (OpenAPI 2026-10-20). Montos en pesos MXN (decimales), fechas en Unix segundos.
 
-export type Metadata = Record<string, string | number | boolean>;
+export type Metadata = Record<string, string | number | boolean | null>;
 
 export interface CreateQrInput {
   amount: number;            // >= 0; 0 = monto libre
   concept?: string;
-  expiration?: number;       // 0 = no expira; si se fija, >= 360
+  expiration?: number;       // 0 = no expira (explícito); si se fija, >= 360. Omitido: el cliente usa su default (900)
   numRef?: string;           // ^[0-9]{1,7}$
   generateImage?: boolean;
   bankAccountId?: string;    // ULID de cuenta ACTIVE
@@ -131,6 +131,15 @@ export interface PeyClientOptions {
   baseUrl?: string;          // default https://api.pey.mx
   timeoutMs?: number;        // default 20000
   fetch?: typeof fetch;      // inyectable para pruebas
+  defaultQrExpiration?: number; // default 900 s. Se usa cuando createQr no recibe `expiration` (omitirlo crearía un QR que nunca expira)
+}
+
+// pey exige >= 360 s cuando se fija una expiración. 0 significa "no expira" y solo se permite si lo pides explícitamente.
+const MIN_EXPIRATION = 360;
+function assertExpiration(seconds: number): void {
+  if (!Number.isInteger(seconds) || seconds < 0 || (seconds > 0 && seconds < MIN_EXPIRATION)) {
+    throw new RangeError(`expiration must be 0 (never expires) or an integer >= ${MIN_EXPIRATION}, got ${seconds}`);
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -140,9 +149,12 @@ export class PeyClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly defaultQrExpiration: number;
 
   constructor(opts: PeyClientOptions) {
     if (!opts.apiKey) throw new Error('PEY_API_KEY is required');
+    this.defaultQrExpiration = opts.defaultQrExpiration ?? 900;
+    assertExpiration(this.defaultQrExpiration);
     this.apiKey = opts.apiKey;
     this.baseUrl = (opts.baseUrl ?? 'https://api.pey.mx').replace(/\/$/, '');
     this.timeoutMs = opts.timeoutMs ?? 20_000;
@@ -163,7 +175,13 @@ export class PeyClient {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     const text = await res.text();
-    const json = text ? JSON.parse(text) : {};
+    // Un 502/504 de un gateway puede traer HTML: no lo parseamos a ciegas para no perder el status ni el sobre de error.
+    let json: Record<string, any> = {};
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch {
+      if (res.ok) throw new PeyError('pey returned a non-JSON response', 'INVALID_RESPONSE', null, res.status);
+    }
     if (res.ok) return json as T;
     const err = json?.error ?? {};
     throw new PeyError(err.message ?? `pey request failed (${res.status})`, err.type ?? 'UNKNOWN', err.requestId ?? null, res.status);
@@ -187,13 +205,18 @@ export class PeyClient {
     return this.send<T>('POST', path, body);
   }
 
-  createQr(input: CreateQrInput) {
-    return this.post<CreateQrResponse>('/codi/qr', { ...input, amount: round2(input.amount) });
+  async createQr(input: CreateQrInput) {
+    // Sin `expiration` pey crea un QR que NUNCA expira y acepta varios pagos: aplicamos el default del cliente.
+    const expiration = input.expiration ?? this.defaultQrExpiration;
+    assertExpiration(expiration);
+    return this.post<CreateQrResponse>('/codi/qr', { ...input, amount: round2(input.amount), expiration });
   }
-  createPushNotification(input: CreatePushInput) {
-    return this.post<CreatePushResponse>('/codi/pn', {
-      ...input, amount: round2(input.amount), expiration: Math.max(360, input.expiration ?? 360),
-    });
+  async createPushNotification(input: CreatePushInput) {
+    const expiration = input.expiration ?? MIN_EXPIRATION;
+    if (!Number.isInteger(expiration) || expiration < MIN_EXPIRATION) {
+      throw new RangeError(`push expiration must be an integer >= ${MIN_EXPIRATION}, got ${expiration}`);
+    }
+    return this.post<CreatePushResponse>('/codi/pn', { ...input, amount: round2(input.amount), expiration });
   }
   registerBankAccount(input: RegisterBankAccountInput) {
     return this.post<{ id: string; codiStatus: BankAccount['codiStatus'] }>('/bank-account', input);
@@ -324,7 +347,9 @@ app.post('/webhooks/pey', express.raw({ type: 'application/json' }), async (req,
     res.sendStatus(200);
   } catch (e) {
     if (e instanceof InvalidWebhookError) { res.sendStatus(401); return; }
-    throw e;
+    // Express 4 no captura rechazos de handlers async: responde 5xx explícito para que pey reintente.
+    console.error('pey webhook failed', e);
+    res.sendStatus(500);
   }
 });
 
@@ -409,7 +434,11 @@ import type { PeyWebhookEvent } from './types.ts';
 
 // Persistencia que tu proyecto implementa (Prisma, Drizzle, TypeORM, Knex, SQL directo...).
 export interface PeyStore {
-  /** Inserta el evento con índice único en webhook_id. Devuelve false si ya existía (duplicado). */
+  /**
+   * Inserta el evento con índice único en webhook_id y devuelve si HAY QUE ENCOLARLO:
+   * true si es nuevo o si ya existía pero sigue sin procesar (processed_at nulo; p. ej. falló el encolado antes);
+   * false solo si ya se procesó. Decidir por "¿ya existía?" perdería eventos cuando falla el encolado.
+   */
   saveWebhookEvent(webhookId: string, type: string, payload: unknown): Promise<boolean>;
   loadWebhookEvent(webhookId: string): Promise<PeyWebhookEvent | null>;
   markWebhookProcessed(webhookId: string, error?: string): Promise<void>;
@@ -498,9 +527,9 @@ export const worker = new Worker<{ webhookId: string }>(
 );
 ```
 
-Deduplicación según el ORM:
-- **SQL:** índice único en `webhook_id` e `INSERT ... ON CONFLICT DO NOTHING` (PostgreSQL) o `INSERT IGNORE` (MySQL); devuelve si se insertó una fila.
-- **Prisma:** `create` dentro de `try/catch` y trata el error `P2002` (unique constraint) como duplicado.
+Deduplicación según el ORM (en todos: tras el insert, consulta `processed_at`; si es nulo devuelve `true` para reencolar):
+- **SQL:** índice único en `webhook_id` e `INSERT ... ON CONFLICT DO NOTHING` (PostgreSQL) o `INSERT IGNORE` (MySQL), seguido de `SELECT processed_at ... WHERE webhook_id = $1`.
+- **Prisma:** `create` dentro de `try/catch` y trata el error `P2002` (unique constraint) como "ya existe"; entonces lee el registro y decide por `processedAt`.
 - **BullMQ:** usar `jobId: webhookId` evita además encolar dos veces el mismo evento.
 
 `recordPayment` debe correr en una transacción de base de datos con bloqueo de la orden (`SELECT ... FOR UPDATE` o el equivalente del ORM) y con índice único en `transactionId`.
@@ -572,7 +601,7 @@ import { signPeyWebhook } from './helpers.ts';
 function fakeFetch(responses: Array<{ status: number; body: unknown }>): typeof fetch {
   return (async () => {
     const r = responses.shift()!;
-    return new Response(JSON.stringify(r.body), { status: r.status });
+    return new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body), { status: r.status });
   }) as typeof fetch;
 }
 
@@ -592,6 +621,22 @@ test('rechaza un cuerpo alterado', () => {
   assert.throws(() => verifyPeyWebhook(body + ' ', {
     id: h['webhook-id'], timestamp: h['webhook-timestamp'], signature: h['webhook-signature'],
   }, process.env.TEST_SECRET!), InvalidWebhookError);
+});
+```
+
+```ts
+test('createQr sin expiration aplica el default y rechaza 1-359', async () => {
+  let sent = '';
+  const f = (async (_u: unknown, init: RequestInit) => { sent = String(init.body); return new Response('{"id":"a","qrString":"s","qrImage":null}', { status: 201 }); }) as typeof fetch;
+  const client = new PeyClient({ apiKey: 'k', fetch: f });
+  await client.createQr({ amount: 10 });
+  assert.equal(JSON.parse(sent).expiration, 900);
+  await assert.rejects(client.createQr({ amount: 10, expiration: 120 }), RangeError);
+});
+
+test('un 502 con HTML conserva el status en PeyError', async () => {
+  const client = new PeyClient({ apiKey: 'k', fetch: fakeFetch([{ status: 502, body: '<html>Bad Gateway</html>' }]) });
+  await assert.rejects(client.createQr({ amount: 10, expiration: 900 }), (e: unknown) => e instanceof PeyError && e.status === 502);
 });
 ```
 

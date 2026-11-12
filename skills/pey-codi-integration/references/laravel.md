@@ -24,7 +24,11 @@ use Illuminate\Support\Facades\Http;
 
 final class PeyClient
 {
-    public function __construct(private string $apiKey, private string $baseUrl = 'https://api.pey.mx') {}
+    public function __construct(
+        private string $apiKey,
+        private string $baseUrl = 'https://api.pey.mx',
+        private int $defaultQrExpiration = 900,   // s; se usa si createQr no recibe expiración
+    ) {}
 
     private function http(): PendingRequest
     {
@@ -61,8 +65,15 @@ final class PeyClient
         );
     }
 
-    public function createQr(float $amount, string $concept, int $expiration, string $numRef = '0', ?string $bankAccountId = null, array $metadata = [], bool $generateImage = false): array
+    public function createQr(float $amount, string $concept, ?int $expiration = null, string $numRef = '0', ?string $bankAccountId = null, array $metadata = [], bool $generateImage = false): array
     {
+        // Sin expiración pey crea un QR que NUNCA expira y acepta varios pagos: aplica el default.
+        // 0 solo se permite si lo pides explícitamente; 1-359 es inválido para pey.
+        $expiration ??= $this->defaultQrExpiration;
+        if ($expiration !== 0 && $expiration < 360) {
+            throw new \InvalidArgumentException("expiration must be 0 (never expires) or >= 360, got {$expiration}");
+        }
+
         return $this->post('/codi/qr', array_filter([
             'amount' => round($amount, 2),
             'concept' => $concept,
@@ -76,9 +87,13 @@ final class PeyClient
 
     public function createPushNotification(float $amount, string $phone10, string $concept, int $expiration = 360, string $numRef = '0', ?string $bankAccountId = null, array $metadata = []): array
     {
+        if ($expiration < 360) {
+            throw new \InvalidArgumentException("push expiration must be >= 360, got {$expiration}");
+        }
+
         return $this->post('/codi/pn', array_filter([
             'amount' => round($amount, 2), 'phoneNumber' => $phone10, 'concept' => $concept,
-            'expiration' => max(360, $expiration), 'numRef' => $numRef,
+            'expiration' => $expiration, 'numRef' => $numRef,
             'bankAccountId' => $bankAccountId, 'metadata' => $metadata ?: null,
         ], fn ($v) => $v !== null));
     }
@@ -152,34 +167,214 @@ Controller (excluir de CSRF; ruta `POST /webhooks/pey` o `/webhooks/pey/{tenant}
 ```php
 public function __invoke(Request $request, PeyWebhookVerifier $verifier)
 {
-    $secret = /* modelo A: config('services.pey.webhook_secret'); modelo B: secreto cifrado del tenant */;
+    $webhookId = (string) $request->header('webhook-id');
+
     try {
         $event = $verifier->verify(
-            $request->getContent(),
-            (string) $request->header('webhook-id'),
+            $request->getContent(),                       // cuerpo crudo
+            $webhookId,
             (string) $request->header('webhook-timestamp'),
             (string) $request->header('webhook-signature'),
-            $secret,
+            $this->secretFor($request),
         );
     } catch (InvalidWebhook $e) {
         Log::warning('pey webhook rejected', ['reason' => $e->getMessage()]);
         return response()->noContent(401);
     }
 
-    $stored = PeyWebhookEvent::query()->insertOrIgnore([
-        'webhook_id' => $request->header('webhook-id'),
+    PeyWebhookEvent::query()->insertOrIgnore([
+        'webhook_id' => $webhookId,
         'type' => $event['type'] ?? 'unknown',
         'payload' => json_encode($event),
         'created_at' => now(), 'updated_at' => now(),
     ]);
-    if ($stored) ProcessPeyWebhook::dispatch($request->header('webhook-id'));
+
+    // Decide por "¿ya se procesó?", no por "¿ya existía?": si un intento anterior guardó el evento pero falló
+    // al encolar, el reintento de pey debe volver a encolarlo (si no, el evento se pierde).
+    $pending = PeyWebhookEvent::query()->where('webhook_id', $webhookId)->whereNull('processed_at')->exists();
+    if ($pending) {
+        ProcessPeyWebhook::dispatch($webhookId);   // si falla, la excepción devuelve 500 y pey reintenta
+    }
 
     return response()->noContent(200);
 }
+
+private function secretFor(Request $request): string
+{
+    // Modelo A: un secreto global. Modelo B: resuelve el tenant por la ruta o por apiKeyId y descifra su secreto.
+    return (string) config('services.pey.webhook_secret');
+}
 ```
 
-Job `ProcessPeyWebhook` (`ShouldQueue`, `tries=5`, backoff): carga el evento, hace `match ($event['type'])` sobre los 4 tipos, confirma con `PeyClient::getTransaction()` / `getPaymentLink()` / `getBankAccount()`, actualiza `pey_charges`/`pey_transactions`/`pey_bank_accounts` en transacción DB con `lockForUpdate`, marca `processed_at` y dispara eventos de dominio. Tipos desconocidos: guardar y marcar procesado (no fallar).
+Migración de eventos:
+```php
+Schema::create('pey_webhook_events', function (Blueprint $t) {
+    $t->id();
+    $t->string('webhook_id')->unique();   // clave de idempotencia de pey
+    $t->string('type');
+    $t->json('payload');
+    $t->timestamp('processed_at')->nullable();
+    $t->text('error')->nullable();
+    $t->timestamps();
+});
+```
+El modelo `PeyWebhookEvent` castea `payload` a `array` y `processed_at` a `datetime`.
 
-Comando de conciliación `pey:reconcile` (scheduler cada 15 min): para cargos `pending|unknown` vencidos, consulta la API y corrige estado; para cuentas `PENDING|PROCESSING`, `GET /bank-account/{id}` para detectar `ERROR`.
+Registro idempotente del pago (compartido por el job y la conciliación):
+```php
+namespace App\Payments\Pey;
+
+use Illuminate\Support\Facades\DB;
+
+final class PeyPaymentRecorder
+{
+    /** @param array $tx objeto transacción de la API (GET /transaction/{id}) */
+    public function record(array $tx, ?string $payableId = null): void
+    {
+        DB::transaction(function () use ($tx, $payableId) {
+            // Bloquea el cargo para que dos procesos no marquen la misma orden a la vez.
+            $charge = PeyCharge::query()->where('pey_id', $payableId ?? ($tx['payableId'] ?? ''))->lockForUpdate()->first();
+
+            $record = PeyTransaction::query()->firstOrCreate(      // índice único en pey_transaction_id
+                ['pey_transaction_id' => $tx['id']],
+                [
+                    'charge_id' => $charge?->id,
+                    'status' => $tx['status'],
+                    'amount' => $tx['amount'],
+                    'base' => $tx['amountBreakdown']['base'] ?? $tx['amount'],   // concilia contra base, no contra amount
+                    'tip' => $tx['amountBreakdown']['tip'] ?? 0,
+                    'fee' => $tx['amountBreakdown']['fee'] ?? 0,
+                    'application_fee' => $tx['applicationFee'] ?? null,
+                    'payment_method' => $tx['paymentMethod'] ?? null,
+                    'tracking_key' => $tx['metadata']['trackingKey'] ?? null,
+                    'paid_at' => isset($tx['datePaid']) ? now()->setTimestamp($tx['datePaid']) : null,
+                    'raw' => $tx,
+                ],
+            );
+
+            if ($record->wasRecentlyCreated && $charge) {      // solo la primera vez
+                $charge->update(['status' => 'paid']);
+                event(new PaymentReceived($charge, $record));
+            }
+        });
+    }
+}
+```
+
+Job `ProcessPeyWebhook`:
+```php
+namespace App\Payments\Pey;
+
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+
+final class ProcessPeyWebhook implements ShouldQueue, ShouldBeUnique
+{
+    use Dispatchable, InteractsWithQueue, Queueable;
+
+    public int $tries = 5;
+
+    public function __construct(public string $webhookId) {}
+
+    public function uniqueId(): string { return $this->webhookId; }          // no encolar dos veces el mismo evento
+    public function backoff(): array { return [10, 60, 300, 900]; }
+
+    public function handle(PeyClient $client, PeyPaymentRecorder $recorder): void
+    {
+        $row = PeyWebhookEvent::query()->where('webhook_id', $this->webhookId)->first();
+        if (! $row || $row->processed_at) return;
+        $event = $row->payload;
+
+        match ($event['type'] ?? null) {
+            'codi.qr.payment_received', 'codi.pn.payment_received' => $this->payment($client, $recorder, $event),
+            'payment_link.status_updated' => $this->link($client, $recorder, $event),
+            'bank.account.updated' => $this->bankAccount($client, $event),
+            default => null,                                                  // tipo desconocido: guardar y marcar procesado
+        };
+
+        $row->update(['processed_at' => now(), 'error' => null]);
+    }
+
+    public function failed(\Throwable $e): void
+    {
+        PeyWebhookEvent::query()->where('webhook_id', $this->webhookId)->update(['error' => $e->getMessage()]);
+    }
+
+    private function payment(PeyClient $client, PeyPaymentRecorder $recorder, array $event): void
+    {
+        $tx = $client->getTransaction($event['transactionId']);               // la API es la fuente de verdad
+        if (($tx['status'] ?? null) !== 'PAID') {
+            throw new \RuntimeException("Transaction {$tx['id']} not PAID yet");   // el job reintenta
+        }
+        $payableId = $event['type'] === 'codi.qr.payment_received' ? $event['codiQrId'] : $event['transactionId'];
+        $recorder->record($tx, $payableId);
+    }
+
+    private function link(PeyClient $client, PeyPaymentRecorder $recorder, array $event): void
+    {
+        $link = $client->getPaymentLink($event['paymentLinkId']);
+        PeyCharge::query()->where('pey_id', $link['id'])->update(['status' => match ($link['status']) {
+            'paid' => 'paid', 'partial' => 'partial', default => 'pending',   // processing se queda pendiente
+        }]);
+        foreach ($link['transactions'] as $t) {
+            $recorder->record($t + ['id' => $t['transactionId'], 'status' => 'PAID'], $link['id']);
+        }
+    }
+
+    private function bankAccount(PeyClient $client, array $event): void
+    {
+        $acc = $client->getBankAccount($event['bankAccountId']);
+        if ($acc['codiStatus'] === 'ACTIVE') {
+            PeyBankAccount::query()->where('pey_id', $acc['id'])->update(['codi_status' => 'ACTIVE', 'activated_at' => now()]);
+        }
+    }
+}
+```
+
+Comando de conciliación `pey:reconcile` (programado cada 15 min en `routes/console.php`: `Schedule::command('pey:reconcile')->everyFifteenMinutes();`):
+```php
+namespace App\Console\Commands;
+
+use App\Payments\Pey\{PeyBankAccount, PeyCharge, PeyClient, PeyPaymentRecorder};
+use Illuminate\Console\Command;
+
+final class PeyReconcile extends Command
+{
+    protected $signature = 'pey:reconcile';
+    protected $description = 'Concilia cargos pendientes y cuentas CLABE con pey';
+
+    public function handle(PeyClient $client, PeyPaymentRecorder $recorder): int
+    {
+        PeyCharge::query()->whereIn('status', ['pending', 'unknown'])->where('expires_at', '<', now())
+            ->each(function (PeyCharge $ch) use ($client, $recorder) {
+                if ($ch->kind === 'qr') {
+                    foreach ($client->paginate("/transaction/codi/qr/{$ch->pey_id}") as $tx) {
+                        if ($tx['status'] === 'PAID') { $recorder->record($tx, $ch->pey_id); return; }
+                    }
+                    $ch->update(['status' => 'expired']);
+                } elseif ($ch->kind === 'pn') {
+                    $tx = $client->getTransaction($ch->pey_id);
+                    $tx['status'] === 'PAID' ? $recorder->record($tx, $ch->pey_id) : $ch->update(['status' => 'expired']);
+                } else {
+                    $link = $client->getPaymentLink($ch->pey_id);
+                    foreach ($link['transactions'] as $t) {
+                        $recorder->record($t + ['id' => $t['transactionId'], 'status' => 'PAID'], $link['id']);
+                    }
+                }
+            });
+
+        // bank.account.updated no avisa de ERROR: consulta las cuentas pendientes.
+        PeyBankAccount::query()->whereIn('codi_status', ['PENDING', 'PROCESSING'])->each(function (PeyBankAccount $acc) use ($client) {
+            $a = $client->getBankAccount($acc->pey_id);
+            $acc->update(['codi_status' => $a['codiStatus'], 'error_message' => $a['errorMessage'] ?? null]);
+        });
+
+        return self::SUCCESS;
+    }
+}
+```
 
 Filament (si el proyecto lo usa): recurso `PeyCharge` de solo lectura con filtros por tenant/estado, acción "Conciliar con pey", y en el panel del tenant una página de "Cuenta CLABE para CoDi" con badge de `codiStatus`.

@@ -4,7 +4,7 @@ description: "Integra la API de pey (CoDi QR, CoDi push, links de pago, cuentas 
 license: MIT
 metadata:
   author: "Dante Robles (DoIT Consulting)"
-  version: "1.0.0"
+  version: "1.0.1"
   api-version: "2026-10-20"
 ---
 
@@ -16,7 +16,7 @@ Snapshot del contrato: **OpenAPI "CoDi API" versión `2026-10-20`**. La API es j
 
 ## 0. Antes de empezar: detectar y decidir
 
-1. Detecta el stack del proyecto (composer.json / package.json / pyproject). Hay implementación de referencia en Laravel (sección 8 y `references/laravel.md`); para otros stacks traduce los mismos componentes.
+1. Detecta el stack del proyecto (composer.json / package.json / pyproject). Hay implementaciones de referencia para **Laravel** (`references/laravel.md`) y **Node.js/TypeScript** (`references/node-typescript.md`): lee la que corresponda al stack (sección 8). Para otros lenguajes traduce los mismos componentes.
 2. Busca si ya existe una capa de pagos (interfaz `PaymentGateway`, tablas `payments`/`orders`, otros proveedores como Openpay o Stripe). Integra pey como **un driver más** detrás de esa abstracción; no la dupliques.
 3. **Decide el modelo de tenencia con el usuario** (pregunta si no está claro; cambia todo el diseño):
 
@@ -94,6 +94,7 @@ Respuesta: `{ transactionId (ULID), codiId (folio Banxico 20 dígitos) }`. Error
 - 403 `FORBIDDEN`, 404 `NOT_FOUND`, 409 `PAYMENT_LINK_NOT_PENDING` o `CONCURRENT_UPDATE` (reintenta tras re-leer el link).
 
 **`GET /payment-link/{id}`** → `{ id, amount, status (pending|processing|paid|partial), successUrl, backUrl, hasTip, paymentMethods[], dateCreated, clientReferenceId?, metadata?, transactions[] }`
+- Errores: 400 `AUTH_ERROR`, `PEY_CONSISTENCY_ERROR`, `INCOMPLETE_PARAMETERS`; 403 `FORBIDDEN` (el link es de otra API key); 404 `NOT_FOUND`.
 - Cada transacción: `transactionId, paymentMethod, datePaid, amount, amountBreakdown { base, tip?, fee? }, applicationFee (o null), metadata`.
 
 ### Transacciones
@@ -108,6 +109,8 @@ Respuesta: `{ transactionId (ULID), codiId (folio Banxico 20 dígitos) }`. Error
 Objeto transacción: `id, status (PENDING|PAID), amount, amountBreakdown { base, tip, fee }, currency, paymentMethod (CARD|CODI), payableType (PAYMENT_LINK|API_CODI_QR|API_CODI_PN), payableId, description, applicationFee, dateCreated, datePaid?, metadata`.
 
 Paginación: repite con `nextToken` hasta que sea `null`. Omítelo en la primera página.
+
+Errores de transacciones: 400 `INVALID_REQUEST`, `INCOMPLETE_PARAMETERS` e **`INVALID_PARAMETERS` (plural, distinto del `INVALID_PARAMETER` de los POST)**; 404 `NOT_FOUND` (transacción o QR) o `BANK_ACCOUNT_NOT_FOUND` (cuenta); 503 en `bank-account/{id}`. Al mapear `error.type` incluye ambas grafías y trata cualquier tipo desconocido como error genérico, sin fallar.
 
 ### `metadata` en respuestas
 - Solo CoDi: `clabe`, `bankCode` (Banxico, 5 dígitos), `accountType` (2 dígitos), `description`, `trackingKey` (clave de rastreo Banxico; guárdala, sirve para aclaraciones).
@@ -132,8 +135,8 @@ Paginación: repite con `nextToken` hasta que sea `null`. Omítelo en la primera
 
 ### Pipeline de procesamiento (obligatorio)
 1. Verificar firma (secreto según modelo: global en A; por tenant en B, resuelto por la URL `/webhooks/pey/{tenant}` o por `apiKeyId`). Firma inválida → 401/400, no procesar.
-2. Dedupe: insertar `webhook-id` en `pey_webhook_events` con índice único; si ya existe → 200 sin reprocesar.
-3. Encolar job y responder 200.
+2. Dedupe: insertar `webhook-id` en `pey_webhook_events` con índice único. Decide por **"¿ya se procesó?"**, no por "¿ya existía?": si el evento existe con `processed_at` nulo (p. ej. falló el encolado en un intento anterior), vuelve a encolarlo; solo si ya está procesado → 200 sin reprocesar. Si no, un fallo al encolar pierde el evento para siempre, porque el reintento de pey se descartaría como duplicado.
+3. Encolar job (con `webhook-id` como clave única del job) y responder 200. Si encolar falla, responde 5xx para que pey reintente.
 4. En el job: **confirmar con la API** (`GET /transaction/{transactionId}` o `GET /payment-link/{id}`) antes de marcar pagado. El webhook es la señal; la API es la fuente de verdad.
 5. Resolver la orden: `metadata.externalMetadata.orderId` (string) o `clientReferenceId` o el `payable` guardado (IDC del QR, `transactionId` del push, `id` del link). Validar que el `apiKeyId`/`bankAccountId` pertenece al tenant esperado.
 6. Aplicar transición de estado de forma idempotente (dedupe también por `transactionId`, único en `pey_transactions`). Emitir evento de dominio (`PaymentReceived`).
@@ -182,10 +185,10 @@ Paginación: repite con `nextToken` hasta que sea `null`. Omítelo en la primera
 
 ## 8. Implementación de referencia (Laravel 11+/12)
 
-El código completo está en [references/laravel.md](references/laravel.md). Léelo cuando el proyecto use Laravel; en otros stacks traduce los mismos componentes:
+El código completo está en [references/laravel.md](references/laravel.md) (Laravel 11+) y en [references/node-typescript.md](references/node-typescript.md) (Node.js 18+ / TypeScript: Express, Next.js, NestJS, Fastify, BullMQ). Lee solo el que corresponda al stack; en otros lenguajes traduce los mismos componentes:
 
 - `config/services.php` con `base_url`, `api_key`, `webhook_secret` y expiración por defecto del QR.
-- `PeyClient`: `Http::withToken`, timeouts, reintentos solo en `GET`, `PeyException` con `type` y `requestId`, y un método por endpoint más `paginate()` para `nextToken`.
+- `PeyClient`: `Http::withToken`, timeouts, reintentos solo en `GET`, `PeyException` con `type` y `requestId`, y un método por endpoint más `paginate()` para `nextToken`. `createQr` aplica una expiración por defecto y rechaza valores entre 1 y 359 (ver trampas 1 y 3).
 - `PeyWebhookVerifier`: verificador nativo de Standard Webhooks (probado contra la librería oficial).
 - Controller de webhook: verifica sobre el cuerpo crudo, deduplica por `webhook-id` con `insertOrIgnore` y despacha el job.
 - Job `ProcessPeyWebhook`: confirma contra la API y aplica la transición con `lockForUpdate`.
