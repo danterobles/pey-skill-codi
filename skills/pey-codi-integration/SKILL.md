@@ -4,7 +4,7 @@ description: "Integra la API de pey (CoDi QR, CoDi push, links de pago, cuentas 
 license: MIT
 metadata:
   author: "Dante Robles (DoIT Consulting)"
-  version: "1.0.1"
+  version: "1.0.2"
   api-version: "2026-10-20"
 ---
 
@@ -183,16 +183,29 @@ Errores de transacciones: 400 `INVALID_REQUEST`, `INCOMPLETE_PARAMETERS` e **`IN
 11. Nunca registres el API key, el secreto ni la CLABE completa en logs. Cifra secretos por tenant en BD.
 12. Los timestamps son segundos, no milisegundos. Zona horaria del negocio: `America/Mexico_City` (o la del tenant) al mostrar.
 
-## 8. Implementación de referencia (Laravel 11+/12)
+## 8. Implementaciones de referencia
 
-El código completo está en [references/laravel.md](references/laravel.md) (Laravel 11+) y en [references/node-typescript.md](references/node-typescript.md) (Node.js 18+ / TypeScript: Express, Next.js, NestJS, Fastify, BullMQ). Lee solo el que corresponda al stack; en otros lenguajes traduce los mismos componentes:
+Hay código completo para dos stacks. Lee solo el que corresponda al proyecto; en otros lenguajes traduce los mismos componentes.
 
-- `config/services.php` con `base_url`, `api_key`, `webhook_secret` y expiración por defecto del QR.
-- `PeyClient`: `Http::withToken`, timeouts, reintentos solo en `GET`, `PeyException` con `type` y `requestId`, y un método por endpoint más `paginate()` para `nextToken`. `createQr` aplica una expiración por defecto y rechaza valores entre 1 y 359 (ver trampas 1 y 3).
-- `PeyWebhookVerifier`: verificador nativo de Standard Webhooks (probado contra la librería oficial).
-- Controller de webhook: verifica sobre el cuerpo crudo, deduplica por `webhook-id` con `insertOrIgnore` y despacha el job.
-- Job `ProcessPeyWebhook`: confirma contra la API y aplica la transición con `lockForUpdate`.
-- Comando `pey:reconcile` programado y, si el proyecto usa Filament, recursos de solo lectura y página de cuenta CLABE por tenant.
+| Componente | PHP / Laravel 11+ ([references/laravel.md](references/laravel.md)) | Node.js 18+ / TypeScript ([references/node-typescript.md](references/node-typescript.md)) |
+|---|---|---|
+| Configuración | `config/services.php` | Variables de entorno validadas al arrancar |
+| Cliente | `PeyClient` con `Http::withToken` | `PeyClient` con `fetch` nativo, sin dependencias y `fetch` inyectable |
+| Errores | `PeyException` (`type`, `requestId`, `status`) | `PeyError` (`type`, `requestId`, `status`), también ante respuestas no JSON |
+| Verificador de firmas | `PeyWebhookVerifier` | `verifyPeyWebhook()` con `node:crypto` |
+| Endpoint de webhook | Controller fuera de CSRF | Express, Next.js App Router, NestJS y Fastify |
+| Cola | Job `ProcessPeyWebhook` (`ShouldBeUnique`) | `processPeyWebhook()` + worker de BullMQ (o la cola del proyecto) |
+| Registro del pago | `PeyPaymentRecorder` + migración de eventos | `PeyStore.recordPayment()` que implementa tu ORM |
+| Conciliación | Comando `pey:reconcile` | `reconcilePey()` en cron |
+
+Reglas comunes a ambas:
+- Reintentos automáticos solo en `GET`; nunca en `POST`.
+- `createQr` aplica una expiración por defecto (900 s) y rechaza valores de 1 a 359 (trampas 1 y 3).
+- Montos internos en centavos enteros; convierte a pesos con 2 decimales al llamar a la API.
+- El webhook se verifica sobre el cuerpo crudo, antes de cualquier parser JSON.
+- Deduplicación por **"¿ya se procesó?"** (sección 3): se encola si el evento es nuevo **o sigue pendiente**, y si encolar falla se responde 5xx. En BullMQ usa `jobId: webhookId` con `removeOnFail: true`, o un job fallido bloquea los reintentos de pey.
+- En modelo B, una instancia del cliente por tenant con su key descifrada; nada de singletons globales con la key.
+- Si el proyecto usa Filament: recursos de solo lectura para cobros y una página de cuenta CLABE por tenant.
 
 ## 9. Pruebas
 

@@ -339,9 +339,14 @@ app.post('/webhooks/pey', express.raw({ type: 'application/json' }), async (req,
   const headers = readWebhookHeaders(req.headers);
   try {
     const event = verifyPeyWebhook(req.body as Buffer, headers, process.env.PEY_WEBHOOK_SECRET!);
-    if (await store.saveWebhookEvent(headers.id!, event.type, event)) {
+    // true si el evento es nuevo o sigue sin procesar (p. ej. falló el encolado en un intento anterior).
+    const shouldEnqueue = await store.saveWebhookEvent(headers.id!, event.type, event);
+    if (shouldEnqueue) {
       await peyQueue.add('process', { webhookId: headers.id }, {
         jobId: headers.id!, attempts: 5, backoff: { type: 'exponential', delay: 2000 },
+        // Si el job agota sus intentos, se elimina: así el siguiente reintento de pey puede volver a encolarlo.
+        // Sin esto BullMQ ignora el add con el mismo jobId y el evento queda pendiente para siempre.
+        removeOnFail: true,
       });
     }
     res.sendStatus(200);
@@ -373,8 +378,8 @@ export async function POST(req: Request): Promise<Response> {
   const headers = readWebhookHeaders(req.headers);
   try {
     const event = verifyPeyWebhook(raw, headers, process.env.PEY_WEBHOOK_SECRET!);
-    const isNew = await store.saveWebhookEvent(headers.id!, event.type, event);
-    if (isNew) await enqueue(headers.id!);
+    const shouldEnqueue = await store.saveWebhookEvent(headers.id!, event.type, event); // nuevo o pendiente
+    if (shouldEnqueue) await enqueue(headers.id!);
     return new Response(null, { status: 200 });
   } catch (e) {
     if (e instanceof InvalidWebhookError) return new Response(null, { status: 401 });
@@ -400,8 +405,9 @@ async handle(@Req() req: RawBodyRequest<Request>) {
   const headers = readWebhookHeaders(req.headers as Record<string, string>);
   try {
     const event = verifyPeyWebhook(req.rawBody!, headers, this.config.getOrThrow('PEY_WEBHOOK_SECRET'));
-    if (await this.store.saveWebhookEvent(headers.id!, event.type, event)) {
-      await this.queue.add('process', { webhookId: headers.id }, { jobId: headers.id! });
+    const shouldEnqueue = await this.store.saveWebhookEvent(headers.id!, event.type, event); // nuevo o pendiente
+    if (shouldEnqueue) {
+      await this.queue.add('process', { webhookId: headers.id }, { jobId: headers.id!, attempts: 5, removeOnFail: true });
     }
   } catch (e) {
     if (e instanceof InvalidWebhookError) throw new UnauthorizedException();
@@ -530,7 +536,8 @@ export const worker = new Worker<{ webhookId: string }>(
 Deduplicación según el ORM (en todos: tras el insert, consulta `processed_at`; si es nulo devuelve `true` para reencolar):
 - **SQL:** índice único en `webhook_id` e `INSERT ... ON CONFLICT DO NOTHING` (PostgreSQL) o `INSERT IGNORE` (MySQL), seguido de `SELECT processed_at ... WHERE webhook_id = $1`.
 - **Prisma:** `create` dentro de `try/catch` y trata el error `P2002` (unique constraint) como "ya existe"; entonces lee el registro y decide por `processedAt`.
-- **BullMQ:** usar `jobId: webhookId` evita además encolar dos veces el mismo evento.
+- **BullMQ:** usar `jobId: webhookId` evita encolar dos veces el mismo evento mientras su job existe. Agrega siempre `removeOnFail: true`: BullMQ conserva los jobs fallidos e ignora un `add` con el mismo `jobId`, así que sin esa opción un evento cuyo job agotó sus intentos nunca se vuelve a encolar aunque pey reintente.
+- **Eventos que se quedan pendientes:** si pey deja de reintentar y un evento sigue con `processed_at` nulo, la conciliación (sección 7) recupera el pago consultando la API. Opcionalmente, reencola desde ahí los eventos pendientes con más de unos minutos de antigüedad.
 
 `recordPayment` debe correr en una transacción de base de datos con bloqueo de la orden (`SELECT ... FOR UPDATE` o el equivalente del ORM) y con índice único en `transactionId`.
 
