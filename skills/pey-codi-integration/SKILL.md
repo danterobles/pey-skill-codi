@@ -1,10 +1,11 @@
 ---
 name: pey-codi-integration
-description: "Integra la API de pey (CoDi QR, CoDi push, links de pago, cuentas bancarias, transacciones y webhooks) en una plataforma SaaS, multitenant o no. Usar al cobrar con CoDi o pey.mx."
+description: "Integra la API de pey (CoDi QR, CoDi push, links de pago, cuentas bancarias CLABE, transacciones y webhooks firmados) en una plataforma SaaS, multitenant o no. Usar al cobrar con CoDi o pey.mx. English: integrate the pey CoDi payments API (Banxico QR and push payments, payment links, CLABE bank accounts, signed webhooks) into a Mexican SaaS; reference code for Laravel and Node.js/TypeScript."
 license: MIT
+compatibility: "Sin dependencias ni scripts. Requiere acceso a internet para releer la spec de la API (https://docs.pey.mx/openapi.json). Referencias de código para Laravel 11+ y Node.js 18+."
 metadata:
   author: "Dante Robles (DoIT Consulting)"
-  version: "1.0.2"
+  version: "1.0.3"
   api-version: "2026-10-20"
 ---
 
@@ -12,7 +13,7 @@ metadata:
 
 Este skill guía a un agente de código para integrar la API de **pey** (https://pey.mx/api-codi) en un SaaS: cobros CoDi® por QR, cobros CoDi por notificación push al celular, links de pago hospedados (CoDi + tarjeta + Apple Pay + Google Pay), registro de cuentas CLABE por tenant, consulta de transacciones y recepción de webhooks firmados.
 
-Snapshot del contrato: **OpenAPI "CoDi API" versión `2026-10-20`**. La API es joven y cambia: antes de escribir código, vuelve a leer `https://docs.pey.mx/openapi.json` (WebFetch, por partes; mide ~130 KB) y el changelog `https://docs.pey.mx/docs/category/changelog`. Si algo difiere de este documento, **manda la spec**.
+Snapshot del contrato: **OpenAPI "CoDi API" versión `2026-10-20`**. La API es joven y cambia: antes de escribir código, vuelve a leer `https://docs.pey.mx/openapi.json` (con la herramienta de descarga web de tu agente o con `curl`; léela por partes, mide ~130 KB) y el changelog `https://docs.pey.mx/docs/category/changelog`. Si algo difiere de este documento, **manda la spec**.
 
 ## 0. Antes de empezar: detectar y decidir
 
