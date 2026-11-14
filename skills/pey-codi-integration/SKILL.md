@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Sin dependencias ni scripts. Requiere acceso a internet para releer la spec de la API (https://docs.pey.mx/openapi.json). Referencias de código para Laravel 11+ y Node.js 18+."
 metadata:
   author: "Dante Robles (DoIT Consulting)"
-  version: "1.0.3"
+  version: "1.0.4"
   api-version: "2026-10-20"
 ---
 

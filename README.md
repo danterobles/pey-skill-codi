@@ -79,7 +79,7 @@ El skill queda disponible como `/pey-codi:pey-codi-integration` y Claude tambié
 ```
 npx skills add danterobles/pey-skill-codi        # en el proyecto actual
 npx skills add danterobles/pey-skill-codi -g     # para todos tus proyectos
-npx skills add danterobles/pey-skill-codi -a claude-code -a cursor -a antigravity -a zed
+npx skills add danterobles/pey-skill-codi -a claude-code -a cursor -a antigravity -a zed -a opencode
 ```
 
 ### Manual
@@ -97,8 +97,11 @@ O copia la carpeta `skills/pey-codi-integration/` a:
 | Cursor (2.4+) | `.cursor/skills/` o `.agents/skills/` | `~/.cursor/skills/` |
 | Antigravity (IDE y CLI) | `.agents/skills/` (`.agent/skills/` sigue funcionando) | consulta la documentación de Antigravity |
 | Zed | `.agents/skills/` | `~/.agents/skills/` |
+| OpenCode | `.opencode/skills/` o `.agents/skills/` | `~/.config/opencode/skills/` (también lee `~/.agents/skills/` y `~/.claude/skills/`) |
 | Windsurf | `.windsurf/skills/` | `~/.codeium/windsurf/skills/` |
-| Codex, Gemini CLI, GitHub Copilot, Cline, OpenCode, Warp, Kilo, Amp | `.agents/skills/` | varía por agente; con `npx skills add ... -g` el CLI elige la ruta |
+| Codex, Gemini CLI, GitHub Copilot, Cline, Warp, Kilo, Amp | `.agents/skills/` | varía por agente; con `npx skills add ... -g` el CLI elige la ruta |
+
+**Si OpenCode no muestra el skill:** su ID sale del nombre de la carpeta (`pey-codi-integration`), así que no la renombres. Revisa que `opencode.json` no tenga una regla de permisos `skill` con `deny` (lo oculta) o `ask` (pide confirmación). Puedes cargarlo a mano mencionando `@pey-codi-integration` en tu prompt.
 
 Copia siempre la **carpeta completa**: las guías de Laravel y Node están en `references/` y `SKILL.md` las necesita. En Zed no uses "crear skill desde URL" con un `.md` suelto: solo trae un archivo y se perderían las referencias.
 
@@ -108,7 +111,7 @@ Si tu agente o versión no lee `SKILL.md`, la carpeta `integrations/` trae plant
 
 | Archivo | Para quién | Dónde ponerlo |
 |---|---|---|
-| [`integrations/AGENTS.snippet.md`](integrations/AGENTS.snippet.md) | Agentes que leen `AGENTS.md` (Codex, Zed, Cursor, GitHub Copilot, Windsurf y otros) | Agrégalo al `AGENTS.md` de tu proyecto |
+| [`integrations/AGENTS.snippet.md`](integrations/AGENTS.snippet.md) | Agentes que leen `AGENTS.md` (Codex, Zed, Cursor, OpenCode, GitHub Copilot, Windsurf y otros) | Agrégalo al `AGENTS.md` de tu proyecto |
 | [`integrations/cursor/pey-codi.mdc`](integrations/cursor/pey-codi.mdc) | Cursor anterior a 2.4 | `.cursor/rules/pey-codi.mdc` |
 
 Ambas plantillas solo le indican al agente que lea el skill (`.agents/skills/pey-codi-integration/`), así que instala la carpeta del skill también.
