@@ -1,8 +1,8 @@
-# pey-codi-integration · Skill para agentes de IA
+# pey-skill-codi · Skill para agentes de IA
 
 Repositorio: https://github.com/danterobles/pey-skill-codi
 
-Skill en formato abierto [Agent Skills](https://agentskills.io) que le enseña a un agente de código (Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot y otros) a integrar la **API CoDi® de [pey](https://pey.mx/api-codi)** en una plataforma SaaS, multitenant o no, con implementaciones de referencia para **PHP/Laravel** y **Node.js/TypeScript**:
+Este repositorio contiene el skill **`pey-codi-integration`**, en formato abierto [Agent Skills](https://agentskills.io), que le enseña a un agente de código (Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot y otros) a integrar la **API CoDi® de [pey](https://pey.mx/api-codi)** en una plataforma SaaS, multitenant o no, con implementaciones de referencia para **PHP/Laravel** y **Node.js/TypeScript**:
 
 - Cobros CoDi por **QR** y por **notificación push** al celular
 - **Links de pago** hospedados (CoDi, tarjeta, Apple Pay y Google Pay)
@@ -64,6 +64,17 @@ Revisado el 9 de noviembre de 2026 en el sitio y los [términos del API](https:/
 | Devoluciones | pey no revierte transferencias liquidadas: **las devoluciones al pagador las hace el integrador**, y las aclaraciones se tramitan con el banco. |
 
 ## Instalación
+
+### Nombres que verás
+
+El repositorio, el skill y el plugin tienen nombres distintos a propósito. Úsalos así:
+
+| Qué es | Nombre | Dónde lo usas |
+|---|---|---|
+| Repositorio | `pey-skill-codi` | GitHub, `git clone`, `npx skills add danterobles/pey-skill-codi` |
+| Skill | `pey-codi-integration` | La carpeta `skills/pey-codi-integration/`, el ID que ven los agentes y `@pey-codi-integration` en OpenCode. **No la renombres** |
+| Plugin de Claude Code | `pey-codi` | `/plugin install pey-codi@doit-skills` y `/pey-codi:pey-codi-integration` |
+| Marketplace de Claude Code | `doit-skills` | `/plugin marketplace add danterobles/pey-skill-codi` |
 
 ### Claude Code (como plugin)
 
@@ -131,12 +142,15 @@ El agente detecta tu stack (Laravel o Node.js/TypeScript; en otros lenguajes tra
 ## Qué incluye
 
 ```
-skills/pey-codi-integration/
-├── SKILL.md                 # Contrato de la API, decisiones, flujos, trampas, pruebas y checklist
-└── references/
-    ├── laravel.md           # PHP / Laravel 11+: cliente, verificador, controller, job y conciliación
-    └── node-typescript.md   # Node.js 18+ / TypeScript: cliente, verificador, Express, Next.js, NestJS, Fastify, BullMQ
-integrations/                # Plantillas para agentes sin soporte de skills (AGENTS.md, regla de Cursor)
+pey-skill-codi/                          # el repositorio
+├── .claude-plugin/                      # Manifiestos del plugin (pey-codi) y del marketplace (doit-skills)
+├── skills/
+│   └── pey-codi-integration/            # el skill
+│       ├── SKILL.md                     # Contrato de la API, decisiones, flujos, trampas, pruebas y checklist
+│       └── references/
+│           ├── laravel.md               # PHP / Laravel 11+: cliente, verificador, controller, job y conciliación
+│           └── node-typescript.md       # Node.js 18+ / TypeScript: cliente, verificador, Express, Next.js, NestJS, Fastify, BullMQ
+└── integrations/                        # Plantillas para agentes sin soporte de skills (AGENTS.md, regla de Cursor)
 ```
 
 ## Antes de usarlo en producción
